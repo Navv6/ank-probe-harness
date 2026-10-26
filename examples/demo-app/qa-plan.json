@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "trackedPaths": ["src", "tests"],
+  "suites": {
+    "local": [{"id":"add-test","argv":["node","--test","tests/local.test.mjs"],"timeoutSeconds":30}],
+    "impact": [{"id":"multiply-test","argv":["node","--test","tests/impact.test.mjs"],"timeoutSeconds":30}],
+    "global": [{"id":"core-flow-test","argv":["node","--test","tests/global.test.mjs"],"timeoutSeconds":30}]
+  },
+  "manualChecks": [
+    {"id":"math-review","phase":"global","title":"가상 산술 동작을 직접 확인 (예시)"}
+  ]
+}

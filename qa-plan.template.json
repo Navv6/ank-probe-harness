@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "trackedPaths": ["src", "tests"],
+  "suites": {
+    "local": [],
+    "impact": [],
+    "global": []
+  },
+  "manualChecks": [
+    {"id":"local-check","phase":"local","title":"수정 기능을 직접 검사"},
+    {"id":"impact-check","phase":"impact","title":"연관 기능을 직접 검사"},
+    {"id":"core-check","phase":"global","title":"필수 사용자 흐름 전체를 직접 검사"}
+  ]
+}

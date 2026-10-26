@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+*.log
+*.tmp
+.env
+.env.*
+!*.example
+
+# Exam-only local evidence; never publish task data
+.ank/
+qa-plan.json
+# Public, synthetic demo config is safe to distribute
+!examples/demo-app/qa-plan.json
