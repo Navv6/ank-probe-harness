@@ -1,4 +1,4 @@
-# A.N.K. v0.9 — QA / Regression / Recovery 설계·구현 명세
+# A.N.K. v0.9.1 — QA / Regression / Recovery 설계·구현 명세
 
 **상태:** 로컬 실행 가능한 시제품(시험 플랫폼 호환성 미검증). v0.8 상태·Handoff 모듈을 유지하면서 실제 테스트와 증거 검사를 통합한다.
 
@@ -40,6 +40,7 @@
 
 - `qa-plan.json`에 각 단계별 `suites`(자동 명령)와 `manualChecks`를 지정한다.
 - 허용된 실행 프로그램 이름은 `node`, `python`, `python3`, `pytest`, `npm`, `pnpm`, `yarn`, `go`, `cargo`. `-e`, `-c`, shell 직접 호출, 패키지 설치 명령 일부는 차단한다.
+- `npx`는 실행 시 외부 패키지를 내려받을 수 있어 의도적으로 제외한다. vitest·jest·playwright 등은 `package.json` `scripts`에 등록 후 `npm run <script>`로 실행하며, 차단 오류 메시지에 이 대안을 표시한다. Java/Gradle 계열은 미지원.
 - **주의:** 허용 명령의 스크립트가 네트워크를 호출하거나 파일을 변경할 가능성까지 격리하지 못한다. 보안 샌드박스가 아니며 계획을 직접 검토해야 한다.
 - 명령당 최대 300초, stdout/stderr 기록은 일부만 보존한다. 타임아웃·신호·오류는 실패다.
 - `WORKSTATE` 정적 상태 검사는 유지하고, `--qa-project`의 엄격 모드에서 현재 코드·계획·epoch과 실제 Gate receipt 일치 여부를 대조한다.
@@ -54,6 +55,12 @@
 기본 시나리오: 기존 기능 통과 → 변경 → 국소 문제 수정 → 해당 테스트 PASS → 영향 경로 실패 발견 → P1 등록 → 추가 수정 또는 복구 → 세 단계 **모두 새로 검증** → PASS/미해결 위험 판단. 기존 PASS 기록은 당시의 관찰이며 현재 상태의 보증이 아니다.
 
 ## 7. SAFE와 복원
+
+**v0.9.1 기본값은 로컬 git 커밋이다.** 공식 가이드 9장은 수집 기록으로 "git 로그·diff·테스트 실행 결과"를 명시하고, 금지는 Git Push다. 커밋은 SAFE이자 평가자가 보는 작업 이력이며, 복구도 `git restore`/`git revert`로 이력을 남긴다. `gate`가 PASS를 저장하면 `commitHint`(추적 경로만 `git add -- ...`)를 출력하되 **자동 커밋은 하지 않는다**(사용자 승인).
+
+`.ank/` 오염 방지: `qa.mjs` CLI는 실행 시 상위로 올라가며 `.git` **디렉터리**를 찾아 `.git/info/exclude`에 `.ank/`를 한 번만 추가한다. 과제의 `.gitignore`는 수정하지 않으며, `.git`이 파일(worktree·submodule)이면 건너뛴다(`localExclude`: `ADDED`/`PRESENT`/`NO_GIT`/`SKIPPED_GIT_FILE`). 이는 `git add -A`에 스냅샷·증거가 섞이는 것을 막을 뿐, `.ank`가 작업 공간 제출물에 포함되는 것은 막지 못한다(제출 전 사용자 판단).
+
+아래 `.ank` 스냅샷은 git을 쓸 수 없을 때의 보조 수단이다.
 
 `createSnapshot`은 `trackedPaths` 스코프만 `.ank/snapshots/S-<ID>/files`에 저장하고 manifest와 해시를 기록한다. `--task T01`가 있을 때 해당 태스크 Gate가 현재 PASS면 `verifiedByGate:true` 기록. 이 값조차 사용자의 실제 전체 사용 흐름 확인을 대신하지 못한다.
 
@@ -87,6 +94,9 @@
 - 외부 AI·API·개인 PC 업로드·Git Push·문제/자료 외부 전송을 구현하지 않음. 패키지 설치 없음.
 - Gate 실행이 오래 걸리면 각 단계의 검사 범위를 줄이되 **세 단계 자체를 누락하지 않는다**.
 - 작업 종료 약 10분 전 제출 절차를 시작하고, 후속 서술형에서는 어떤 AI도 사용하지 않는다.
+- 제출 문서는 AI와 작성 가능하며 판단·근거·검증·한계가 담겨야 한다(가이드 6장) → `START.md` 8) EXPORT로 WORKSTATE를 변환한다. `.ank`는 숨김 폴더라 미리보기에서 빠질 수 있으므로 핵심 증거는 문서 본문에 평문으로 남긴다.
+- 후속 서술형은 제출물·작업 기록 기반 6문항×5분, 복사붙여넣기·이전 문항 이동 불가(가이드 8장) → 확정 **전에** `START.md` 9) PRE-SUBMIT BRIEF를 화면으로만 출력해 직접 읽는다. 브리프는 답안이 아니라 키워드 수준의 자기 점검이다.
+- Browser 미리보기는 서버 `0.0.0.0` 바인딩이 필요하다(가이드 5장). AGENTS.md는 과제 루트에 기존 파일이 없을 때만 복사한다.
 
 ## 11. v1.0 이전 완료 조건
 
@@ -95,7 +105,8 @@
 - [x] 사용자가 승인하는 복구, 기존 내용 rescue 보존.
 - [x] WORKSTATE `QA_GATE`와 현재 프로젝트 상태 연결.
 - [x] 로컬 모의 테스트(테스트 기록에서 확인).
-- [ ] COFA Probe 실제 체험에서 Node 18+/공개 Clone/Codex/Browser/QA 실행 호환성 확인.
+- [x] 공식 안내 PDF 2종과 대조한 v0.9.1 보완(git SAFE, `.ank` exclude, EXPORT/BRIEF, 0.0.0.0, `/model`, AGENTS.md 배치, 체험 순서표).
+- [ ] COFA Probe 실제 체험에서 Node 18+/공개 Clone/Codex/Browser/QA 실행/AGENTS.md 로딩/로컬 커밋 호환성 확인.
 - [ ] 180분 모의평가에서 추가 관리시간·누락 감소·버그 탐지의 실측 비교.
 - [ ] 화면/데이터/백엔드 유형별 테스트 계획을 실제 문제에 따라 선택·압축하는 정책 검증.
 

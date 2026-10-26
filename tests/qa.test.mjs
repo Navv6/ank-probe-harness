@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
   loadPlan,fingerprint,runPhase,recordManual,gate,addIssue,resolveIssue,createSnapshot,
-  verifySnapshot,restoreSnapshot
+  verifySnapshot,restoreSnapshot,ensureLocalExclude
 } from '../tools/qa.mjs';
 const source=fs.realpathSync(fileURLToPath(new URL('../examples/demo-app/',import.meta.url)));
 function setup(t) {
@@ -122,4 +122,27 @@ test('추적 대상 상위/하위 경로 중복은 스냅샷 무결성 위험이
   p.trackedPaths=['src','src/calc.mjs'];
   fs.writeFileSync(x.planFile,JSON.stringify(p));
   assert.throws(()=>loadPlan(x.planFile,x.project),/중복\/포함된 추적 경로/);
+});
+test('.ank는 과제 .gitignore가 아닌 .git/info/exclude에만 한 번 추가',t=>{
+  const x=setup(t);
+  assert.equal(ensureLocalExclude(x.project),'NO_GIT');
+  fs.mkdirSync(path.join(x.project,'.git','info'),{recursive:true});
+  fs.writeFileSync(path.join(x.project,'.git','info','exclude'),'*.swp');
+  assert.equal(ensureLocalExclude(path.join(x.project,'src')),'ADDED');
+  assert.equal(ensureLocalExclude(x.project),'PRESENT');
+  const ex=fs.readFileSync(path.join(x.project,'.git','info','exclude'),'utf8');
+  assert.match(ex,/^\*\.swp\n# A\.N\.K\./);assert.equal(ex.match(/^\.ank\/$/mg).length,1);
+  assert.equal(fs.existsSync(path.join(x.project,'.gitignore')),false);
+  fs.rmSync(path.join(x.project,'.git'),{recursive:true});fs.writeFileSync(path.join(x.project,'.git'),'gitdir: elsewhere');
+  assert.equal(ensureLocalExclude(x.project),'SKIPPED_GIT_FILE');
+});
+test('Gate PASS 저장 시에만 로컬 커밋 안내, npx는 npm run 대안 안내와 함께 차단',t=>{
+  const x=setup(t);
+  assert.equal(gate({...x,save:true}).commitHint,undefined);
+  runAll(x);manual(x);
+  const r=gate({...x,save:true});
+  assert.match(r.commitHint,/^git add -- src tests && git commit -m "T01: LOCAL\/IMPACT\/GLOBAL PASS \(gate-/);
+  const p=JSON.parse(fs.readFileSync(x.planFile,'utf8'));
+  p.suites.local[0].argv=['npx','vitest','run'];fs.writeFileSync(x.planFile,JSON.stringify(p));
+  assert.throws(()=>loadPlan(x.planFile,x.project),/npm","run/);
 });

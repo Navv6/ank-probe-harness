@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * A.N.K. v0.9 QA harness — Node builtins, offline orchestration.
+ * A.N.K. v0.9.1 QA harness — Node builtins, offline orchestration.
  * Runs ONLY explicitly reviewed local commands (shell:false); it does not establish
  * a network sandbox. The commands and dependencies themselves must be trusted.
  * Does not run Computer Use, push Git, or contact an external service.
+ * Only local git touch: appends `.ank/` to .git/info/exclude (never the task's .gitignore).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -63,7 +64,7 @@ export function loadPlan(planFile, project) {
       if (!c.id || !/^[a-zA-Z0-9_-]+$/.test(c.id) || seen.has(c.id)) throw Error(`중복 또는 잘못된 검사 ID: ${c.id}`);
       seen.add(c.id);
       if (!Array.isArray(c.argv)||c.argv.length<1||c.argv.some(a=>typeof a!=='string'||!a||a.includes('\0'))) throw Error(`${c.id}: argv 배열 필요`);
-      if (!ALLOWED_CMDS.has(c.argv[0]) || c.argv.slice(1).some(a=>BANNED_ARGS.has(a))) throw Error(`${c.id}: 미허용 실행 명령/옵션`);
+      if (!ALLOWED_CMDS.has(c.argv[0]) || c.argv.slice(1).some(a=>BANNED_ARGS.has(a))) throw Error(`${c.id}: 미허용 실행 명령/옵션 (npx·셸 스크립트 등은 package.json scripts에 등록 후 ["npm","run","<script>"]로 실행)`);
       if (c.argv[0]==='npm' && c.argv[1]==='install') throw Error(`${c.id}: npm install은 QA 실행 대상 아님`);
       if (c.argv[0]==='pnpm' && c.argv[1]==='install') throw Error(`${c.id}: pnpm install은 QA 실행 대상 아님`);
       if (c.argv[0]==='yarn' && c.argv[1]==='add') throw Error(`${c.id}: 패키지 설치 명령은 QA 실행 대상 아님`);
@@ -102,6 +103,20 @@ export function fingerprint(project, paths) {
     dig.update(rel+'\0'+sha(buf)+'\0');
   }
   return {digest:dig.digest('hex'),files:files.length};
+}
+// Keep QA evidence/snapshots out of `git add -A` and the collected git diff, without editing
+// the task's own .gitignore. Only a real .git directory is touched; worktree/submodule .git files are skipped.
+export function ensureLocalExclude(project) {
+  let dir=project;
+  while (!fs.existsSync(path.join(dir,'.git'))) { const up=path.dirname(dir); if (up===dir) return 'NO_GIT'; dir=up; }
+  const gitDir=path.join(dir,'.git');
+  if (!fs.lstatSync(gitDir).isDirectory()) return 'SKIPPED_GIT_FILE';
+  const file=path.join(gitDir,'info','exclude');
+  const cur=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
+  if (cur.split(/\r?\n/).some(l=>['.ank','.ank/','/.ank','/.ank/'].includes(l.trim()))) return 'PRESENT';
+  fs.mkdirSync(path.dirname(file),{recursive:true});
+  fs.appendFileSync(file,(cur&&!cur.endsWith('\n')?'\n':'')+'# A.N.K. local QA evidence (not part of the task)\n.ank/\n');
+  return 'ADDED';
 }
 const runFolder=(project,task)=>path.join(project,'.ank','qa',task);
 function epochFile(project){return path.join(project,'.ank','qa-epoch.txt');}
@@ -204,6 +219,8 @@ export function gate({project,planFile,task,save=false}) {
     const f=path.join(runFolder(project,task),`gate-${uniq()}.json`);
     write(f,report);
     report.savedTo=path.relative(project,f);
+    // A verified state is best kept as a local commit: git log/diff are collected for evaluation, and Push is not allowed.
+    if(report.status==='PASS')report.commitHint=`git add -- ${plan.trackedPaths.join(' ')} && git commit -m "${task}: LOCAL/IMPACT/GLOBAL PASS (${path.basename(f,'.json')})"`;
   }
   return report;
 }
@@ -267,7 +284,7 @@ function options(args){
   return out;
 }
 function help() {
-  return `A.N.K. v0.9 QA (로컬 전용 / Node 18+)\n\n`+
+  return `A.N.K. v0.9.1 QA (로컬 전용 / Node 18+)\n\n`+
     `node tools/qa.mjs inspect --project ./project --plan ./project/qa-plan.json\n`+
     `node tools/qa.mjs run --project ./project --plan ./project/qa-plan.json --task T01 --phase local|impact|global\n`+
     `node tools/qa.mjs manual --project ... --plan ... --task T01 --check ui-core --result PASS|FAIL --note "실제 관찰"\n`+
@@ -285,8 +302,9 @@ function main(){
   const project=fs.realpathSync(requireArg(o.project,'--project'));
   const planFile=o.plan?path.resolve(o.plan):path.join(project,'qa-plan.json');
   let result;
+  const localExclude=ensureLocalExclude(project);
   switch(verb){
-    case 'inspect': {const {plan,planHash}=loadPlan(planFile,project);result={version:plan.version,planHash,trackedPaths:plan.trackedPaths,suites:Object.fromEntries(PHASES.map(p=>[p,plan.suites[p].map(c=>c.id)])),manualChecks:plan.manualChecks||[],fingerprint:fingerprint(project,plan.trackedPaths)};break;}
+    case 'inspect': {const {plan,planHash}=loadPlan(planFile,project);result={version:plan.version,planHash,localExclude,trackedPaths:plan.trackedPaths,suites:Object.fromEntries(PHASES.map(p=>[p,plan.suites[p].map(c=>c.id)])),manualChecks:plan.manualChecks||[],fingerprint:fingerprint(project,plan.trackedPaths)};break;}
     case 'run': result=runPhase({project,planFile,task:o.task,phase:o.phase});break;
     case 'manual':result=recordManual({project,planFile,task:o.task,check:o.check,result:o.result,note:o.note});break;
     case 'gate':result=gate({project,planFile,task:o.task,save:true});break;

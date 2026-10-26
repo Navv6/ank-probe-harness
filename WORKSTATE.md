@@ -28,4 +28,5 @@ NEXT: 과제 README 분석 및 ALIGN 확인
      E01 | T01 | LOCAL=PASS | IMPACT=PASS | GLOBAL=PASS | DETAILS: QA_GATE=.ank/qa/T01/gate-<ID>.json; 실제 확인 요약
      `node tools/state.mjs check WORKSTATE.md --qa-project <과제경로>`로 현재 코드/계획과 대조.
      Node가 없다면 세 단계의 수동 관찰 결과를 적고 정적 검사에만 의존하지 마세요.
-     SAFE에는 검증된 실물 스냅샷 또는 로컬 커밋 및 복원 방법을 적습니다. -->
+     SAFE에는 검증된 로컬 git 커밋(우선, 예: SAFE: commit a1b2c3d / git restore --source=a1b2c3d -- src)
+     또는 실물 스냅샷과 복원 방법을 적습니다. -->
