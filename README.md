@@ -1,8 +1,11 @@
-# A.N.K. v0.9.1 — COFA Probe Intent & QA Harness
+# A.N.K. v0.9.2 — COFA Probe Intent & QA Harness
 
 > **의도 정렬 → 변경 → 버그 탐색 → LOCAL/IMPACT/GLOBAL 검증 → WORKSTATE 갱신 → 안전 복구**. 180분 과제를 위한 사람이 통제하는 범용 도구. 실제 출제 과제의 답안을 미리 준비하지 않습니다.
 
 ## 무엇이 달라졌나
+
+- **v0.9.2 안정화:** `inspect`는 Git 설정을 변경하지 않는 조회 전용. `.ank/` 제외는 `git-setup`에서만 적용. 코드·테스트·설정·SQL·정적 자산 등이 `trackedPaths` 밖에 남으면 Gate 실행 전 차단(확인 가능한 파일 유형 기준). Gate PASS 시 과제 절대 경로를 쓰는 Git 커밋 제안과 WORKSTATE·qa-plan 포함. `git-restore`는 DRY_RUN 기본, 구조 백업 및 증거 무효화를 수행. 현재 브랜치의 원격 직접 실행 검증은 별도 필요.
+
 
 - **v0.9.1 (공식 안내 PDF 대조 반영):**
   - **로컬 git 커밋을 기본 SAFE로**: git 로그·diff가 평가 자료로 수집되므로(가이드 9장) Gate PASS마다 로컬 커밋. `gate`가 PASS일 때 `commitHint` 출력.
@@ -54,7 +57,8 @@ tests/*.test.mjs           하네스 자체 통합 테스트
 
 ```bash
 cd ~ && git clone https://github.com/Navv6/ank-probe-harness.git ank   # 과제 폴더 밖 (가능한 경우)
-node ~/ank/tools/qa.mjs inspect --project ~/workspace                   # 경로는 실제 작업 공간에 맞게
+node ~/ank/tools/qa.mjs inspect --project ~/workspace  # 조회만, Git 설정 변경 없음
+node ~/ank/tools/qa.mjs git-setup --project ~/workspace  # 명시적으로 Git 제외 설정                   # 경로는 실제 작업 공간에 맞게
 ```
 
 **AGENTS.md 적용:** Codex CLI는 통상 실행 위치(git 루트~현재 폴더)의 `AGENTS.md`를 읽으므로, 하위 폴더에 clone한 툴킷의 `AGENTS.md`는 과제 루트에서 실행한 Codex에 적용되지 않습니다.
@@ -215,3 +219,12 @@ node --test tests/*.test.mjs
 - 시험 시간 종료 약 **10분 전 제출 시작**이 공식 권장사항입니다. 후속 서술형 전에는 코드와 판단 근거를 이해해 두어야 합니다.
 - 외부로 데이터를 전송하는 기능은 구현하지 않았지만, **사용자가 등록한 테스트 명령/그 하위 의존성의 네트워크 동작까지 차단하는 샌드박스는 아닙니다.** 허용된 로컬 테스트 명령만 입력하세요.
 - QA 기록은 `.ank` 아래 **로컬 프로젝트 파일**로만 저장됩니다. 공개 저장소로 Push하지 마세요.
+
+## v0.9.2 안전 복구 CLI
+
+```bash
+node ~/ank/tools/qa.mjs git-restore --project ~/workspace --commit <검증된_SHA>         # DRY_RUN
+node ~/ank/tools/qa.mjs git-restore --project ~/workspace --commit <검증된_SHA> --apply # 사용자 승인 후
+```
+
+복원 후에는 이전 PASS가 무효이며 세 단계 검증과 수동 확인을 다시 수행한다. 추적 범위 밖 실행 관련 파일이 있으면 검사에서 차단되며, 이 경우 `trackedPaths`를 실제 프로젝트에 맞게 보완해야 한다. 자동 탐지는 모든 종류의 파일을 보장하지 않으므로 사람이 검토한다.
