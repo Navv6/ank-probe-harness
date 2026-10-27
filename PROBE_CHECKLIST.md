@@ -21,6 +21,13 @@
 - [ ] 위 결과(가능/불가)를 메모해 두고 당일 방식(clone 위치·AGENTS.md·git·Node)을 미리 확정한다.
 - [ ] 사용 허용이 애매한 공개 GitHub 도구는 운영 안내(Cofa Helper)를 확인한다.
 
+## v0.9.2 체크
+
+- [ ] `inspect`는 읽기 전용이며 `.ank` Git 제외 처리는 `git-setup`에서 사용자 결정 후 시행한다.
+- [ ] `trackedPaths`에 변경 가능한 실행·SQL·설정·자산이 빠지지 않았는지 Gate 전 확인한다.
+- [ ] Git Gate PASS 후 `commitHint`의 과제 경로와 포함 파일을 확인한다. `WORKSTATE.md`와 `qa-plan.json`이 있는 경우 함께 저장한다.
+- [ ] Git 복구는 `git-restore` DRY_RUN → 사용자 승인 → `--apply` → 증거 무효화 → 세 단계 재검증으로 처리한다.
+
 ## 실제 과제 실행
 
 - [ ] 개인 API 키/외부 AI/개인 PC 업로드/Git Push/문제·결과 외부 전송을 사용하지 않는다.
