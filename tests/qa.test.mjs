@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {spawnSync} from 'node:child_process';
 import {
   loadPlan,fingerprint,runPhase,recordManual,gate,addIssue,resolveIssue,createSnapshot,
-  verifySnapshot,restoreSnapshot,ensureLocalExclude
+  verifySnapshot,restoreSnapshot,ensureLocalExclude,restoreGit,coverageAudit
 } from '../tools/qa.mjs';
 const source=fs.realpathSync(fileURLToPath(new URL('../examples/demo-app/',import.meta.url)));
 function setup(t) {
@@ -145,4 +146,61 @@ test('Gate PASS 저장 시에만 로컬 커밋 안내, npx는 npm run 대안 안
   const p=JSON.parse(fs.readFileSync(x.planFile,'utf8'));
   p.suites.local[0].argv=['npx','vitest','run'];fs.writeFileSync(x.planFile,JSON.stringify(p));
   assert.throws(()=>loadPlan(x.planFile,x.project),/npm","run/);
+});
+
+function git092(x,...args) {
+ const r=spawnSync('git',['-C',x.project,...args],{encoding:'utf8',shell:false});
+ assert.equal(r.status,0,r.stderr);return r.stdout.trim();
+}
+test('v0.9.2 inspect read-only, explicit Git exclude',t=>{
+ const x=setup(t);
+ fs.mkdirSync(path.join(x.project,'.git','info'),{recursive:true});
+ const file=path.join(x.project,'.git','info','exclude');
+ fs.writeFileSync(file,'*.swp\n');
+ const proc=spawnSync('node',[fileURLToPath(new URL('../tools/qa.mjs',import.meta.url)),'inspect','--project',x.project],{encoding:'utf8'});
+ assert.equal(proc.status,0,proc.stderr);
+ assert.equal(fs.readFileSync(file,'utf8'),'*.swp\n');
+ assert.equal(ensureLocalExclude(x.project),'ADDED');
+ assert.equal(ensureLocalExclude(x.project),'PRESENT');
+});
+test('v0.9.2 coverage rejects missed SQL and accepts tracked SQL',t=>{
+ const x=setup(t);
+ fs.writeFileSync(path.join(x.project,'WORKSTATE.md'),'GOAL: test\n');
+ assert.deepEqual(coverageAudit(x.project,['src','tests']),[]);
+ fs.writeFileSync(path.join(x.project,'migration.sql'),'select 1;');
+ assert.deepEqual(coverageAudit(x.project,['src','tests']),['migration.sql']);
+ assert.throws(()=>loadPlan(x.planFile,x.project),/trackedPaths/);
+ const p=JSON.parse(fs.readFileSync(x.planFile,'utf8'));p.trackedPaths.push('migration.sql');
+ fs.writeFileSync(x.planFile,JSON.stringify(p));assert.doesNotThrow(()=>loadPlan(x.planFile,x.project));
+});
+test('v0.9.2 Git commit hint includes WORKSTATE and uses absolute project',t=>{
+ const x=setup(t);
+ git092(x,'init');git092(x,'config','user.email','test@example.com');git092(x,'config','user.name','ANK');
+ fs.writeFileSync(path.join(x.project,'WORKSTATE.md'),'GOAL: demo\n');
+ git092(x,'add','--','src','tests','qa-plan.json','WORKSTATE.md');git092(x,'commit','-m','baseline');
+ runAll(x);manual(x);const r=gate({...x,save:true});
+ assert.equal(r.status,'PASS');assert.match(r.commitHint,/git -C/);
+ assert.match(r.commitHint,/WORKSTATE\.md/);assert.match(r.commitHint,/qa-plan\.json/);
+});
+test('v0.9.2 Git recovery invalidates old passing Gate',t=>{
+ const x=setup(t);
+ git092(x,'init');git092(x,'config','user.email','test@example.com');git092(x,'config','user.name','ANK');
+ git092(x,'add','--','src','tests','qa-plan.json');git092(x,'commit','-m','baseline');
+ const sha=git092(x,'rev-parse','HEAD');
+ runAll(x);manual(x);assert.equal(gate(x).status,'PASS');
+ fs.writeFileSync(path.join(x.project,'src','calc.mjs'),'export const add=(a,b)=>a+b;\nexport const multiply=(a,b)=>a+b;\n');
+ assert.equal(gate(x).status,'HOLD');assert.equal(restoreGit({...x,commit:sha}).status,'DRY_RUN');
+ const restored=restoreGit({...x,commit:sha,apply:true});
+ assert.equal(restored.status,'RESTORED_UNVERIFIED');assert.equal(gate(x).status,'HOLD');
+ runAll(x);manual(x);assert.equal(gate(x).status,'PASS');
+});
+test('v0.9.2 restores despite untracked file but Gate requires coverage',t=>{
+ const x=setup(t);
+ git092(x,'init');git092(x,'config','user.email','test@example.com');git092(x,'config','user.name','ANK');
+ git092(x,'add','--','src','tests','qa-plan.json');git092(x,'commit','-m','baseline');
+ const sha=git092(x,'rev-parse','HEAD');
+ fs.writeFileSync(path.join(x.project,'unexpected.js'),'export default 1;');
+ assert.throws(()=>gate(x),/trackedPaths/);
+ assert.equal(restoreGit({...x,commit:sha,apply:true}).status,'RESTORED_UNVERIFIED');
+ assert.throws(()=>gate(x),/trackedPaths/);
 });
