@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * A.N.K. v0.9.1 QA harness — Node builtins, offline orchestration.
+ * A.N.K. v0.9.2 QA harness — Node builtins, offline orchestration.
  * Runs ONLY explicitly reviewed local commands (shell:false); it does not establish
  * a network sandbox. The commands and dependencies themselves must be trusted.
  * Does not run Computer Use, push Git, or contact an external service.
@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const PHASES = ['local', 'impact', 'global'];
-const SKIP_DIRS = new Set(['.git','.ank','node_modules','.next','dist','build','coverage','.venv','__pycache__']);
+const SKIP_DIRS = new Set(['.git','.ank','node_modules','.next','dist','build','coverage','.venv','__pycache__','_ank']);
 const MAX_FILES = 3000, MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 const ALLOWED_CMDS = new Set(['node', 'python', 'python3', 'pytest', 'npm', 'pnpm', 'yarn', 'go', 'cargo']);
 const BANNED_ARGS = new Set(['--eval','-e','-c','--execute']);
@@ -45,7 +45,7 @@ function ensureInProject(project, rel, mayMissing=false) {
   }
   return absolute;
 }
-export function loadPlan(planFile, project) {
+export function loadPlan(planFile, project, opts={}) {
   const raw=fs.readFileSync(planFile);
   const plan=JSON.parse(raw.toString('utf8'));
   if (plan.version!==1) throw Error('qa-plan.json version은 1이어야 합니다.');
@@ -78,6 +78,8 @@ export function loadPlan(planFile, project) {
     seen.add(m.id);
   }
   for (const phase of PHASES) if (!(plan.suites[phase].length+man.filter(m=>m.phase===phase).length)) throw Error(`${phase}: 자동/수동 검사 1개 이상 필요`);
+  const uncovered=opts.skipCoverage?[]:coverageAudit(project,plan.trackedPaths);
+  if(uncovered.length) throw Error('trackedPaths 미포함 실행 관련 파일: '+uncovered.slice(0,12).join(', ')+(uncovered.length>12?' ...':'')+'. 계획의 trackedPaths를 보완하세요.');
   return {plan,planHash:sha(raw)};
 }
 export function fingerprint(project, paths) {
@@ -117,6 +119,59 @@ export function ensureLocalExclude(project) {
   fs.mkdirSync(path.dirname(file),{recursive:true});
   fs.appendFileSync(file,(cur&&!cur.endsWith('\n')?'\n':'')+'# A.N.K. local QA evidence (not part of the task)\n.ank/\n');
   return 'ADDED';
+}
+// Detect runtime/config/assets not covered by trackedPaths; a Gate must not silently miss them.
+const RUNTIME_EXTS = new Set(['.js','.mjs','.cjs','.jsx','.ts','.tsx','.py','.go','.rs','.java','.kt','.sql','.html','.css','.scss','.json','.jsonc','.yml','.yaml','.toml','.lock','.sh','.vue','.svelte','.svg','.png','.jpg','.jpeg','.webp','.wasm']);
+const RUNTIME_NAMES = new Set(['Dockerfile','Makefile','Procfile','.env','.env.local','.npmrc','requirements.txt','Gemfile','Pipfile']);
+const STATE_ONLY = new Set(['WORKSTATE.md','qa-plan.json','.gitignore']);
+export function coverageAudit(project,trackedPaths) {
+  const missing=[];
+  const included=rel=>trackedPaths.some(t=>rel===t||rel.startsWith(t+'/'));
+  const walk=(dir='')=>{
+    for(const name of fs.readdirSync(path.join(project,dir)).sort()) {
+      if(SKIP_DIRS.has(name))continue;
+      const rel=dir?dir+'/'+name:name;
+      const absolute=path.join(project,rel);
+      const st=fs.lstatSync(absolute);
+      if(st.isSymbolicLink()) { if(!included(rel))missing.push(rel+' (symlink)');continue; }
+      if(st.isDirectory())walk(rel);
+      else if(st.isFile() && !included(rel) && !STATE_ONLY.has(name) &&
+        (RUNTIME_EXTS.has(path.extname(name).toLowerCase())||RUNTIME_NAMES.has(name))) missing.push(rel);
+      if(missing.length>100)throw Error('추적 제외 실행 관련 파일이 100개를 초과함. trackedPaths를 먼저 검토하세요.');
+    }
+  };
+  walk();return missing;
+}
+function gitCmd(project,args){
+  const r=spawnSync('git',['-C',project,...args],{encoding:'utf8',shell:false,timeout:15000});
+  if(r.error||r.status!==0)throw Error('git '+args[0]+' 실패: '+String(r.stderr||r.error?.message||'').trim());
+  return (r.stdout||'').trim();
+}
+const shellQuote = s => "'" + String(s).replaceAll("'", "'\\''") + "'";
+function commitHint(project,plan,task,gateFile){
+  try { if(gitCmd(project,['rev-parse','--is-inside-work-tree'])!=='true')return null; }
+  catch {return null;}
+  const extras=['qa-plan.json','WORKSTATE.md'].filter(p=>fs.existsSync(path.join(project,p)));
+  const paths=[...new Set([...plan.trackedPaths,...extras])];
+  const msg=task+': LOCAL/IMPACT/GLOBAL PASS ('+path.basename(gateFile,'.json')+')';
+  return 'git -C '+shellQuote(project)+' add -- '+paths.map(shellQuote).join(' ')+
+    ' && git -C '+shellQuote(project)+' status --short'+
+    ' && git -C '+shellQuote(project)+' commit -m '+shellQuote(msg);
+}
+// Restore is opt-in and keeps a rescue copy. Rotate validation epoch even on partial failure.
+export function restoreGit({project,planFile,commit,apply=false}) {
+  if(!/^[0-9a-f]{7,40}$/i.test(commit||''))throw Error('Git commit SHA(7~40자리)가 필요합니다');
+  const {plan}=loadPlan(planFile,project,{skipCoverage:true});
+  gitCmd(project,['cat-file','-e',commit+'^{commit}']);
+  const scope=plan.trackedPaths;
+  if(!apply)return {status:'DRY_RUN',commit,scope,warning:'기존 파일을 덮어쓸 수 있습니다. --apply 시 실행됩니다.'};
+  const rescue='G-'+uniq(),dest=path.join(project,'.ank','rescues',rescue);
+  fs.mkdirSync(dest,{recursive:true});
+  copyScopes(project,dest,scope.filter(rel=>fs.existsSync(path.join(project,rel))));
+  write(path.join(dest,'manifest.json'),{when:now(),commit,scope});
+  rotateEpoch(project);
+  gitCmd(project,['restore','--source='+commit,'--worktree','--',...scope]);
+  return {status:'RESTORED_UNVERIFIED',commit,rescue,scope,warning:'LOCAL/IMPACT/GLOBAL 재검증 필수. 추가된 untracked 파일은 자동 삭제하지 않습니다.'};
 }
 const runFolder=(project,task)=>path.join(project,'.ank','qa',task);
 function epochFile(project){return path.join(project,'.ank','qa-epoch.txt');}
@@ -220,7 +275,7 @@ export function gate({project,planFile,task,save=false}) {
     write(f,report);
     report.savedTo=path.relative(project,f);
     // A verified state is best kept as a local commit: git log/diff are collected for evaluation, and Push is not allowed.
-    if(report.status==='PASS')report.commitHint=`git add -- ${plan.trackedPaths.join(' ')} && git commit -m "${task}: LOCAL/IMPACT/GLOBAL PASS (${path.basename(f,'.json')})"`;
+    if(report.status==='PASS'){const hint=commitHint(project,plan,task,f);if(hint)report.commitHint=hint;else report.commitWarning='Git 저장소가 없어 커밋 안내 생략. 스냅샷 사용 검토';}
   }
   return report;
 }
@@ -284,8 +339,10 @@ function options(args){
   return out;
 }
 function help() {
-  return `A.N.K. v0.9.1 QA (로컬 전용 / Node 18+)\n\n`+
+  return `A.N.K. v0.9.2 QA (로컬 전용 / Node 18+)\n\n`+
     `node tools/qa.mjs inspect --project ./project --plan ./project/qa-plan.json\n`+
+    `node tools/qa.mjs git-setup --project ./project\n`+
+    `node tools/qa.mjs git-restore --project ./project --commit SHA [--apply]\n`+
     `node tools/qa.mjs run --project ./project --plan ./project/qa-plan.json --task T01 --phase local|impact|global\n`+
     `node tools/qa.mjs manual --project ... --plan ... --task T01 --check ui-core --result PASS|FAIL --note "실제 관찰"\n`+
     `node tools/qa.mjs issue-add --project ... --task T01 --severity P1 --summary "오류" --repro "재현 순서"\n`+
@@ -302,9 +359,10 @@ function main(){
   const project=fs.realpathSync(requireArg(o.project,'--project'));
   const planFile=o.plan?path.resolve(o.plan):path.join(project,'qa-plan.json');
   let result;
-  const localExclude=ensureLocalExclude(project);
   switch(verb){
-    case 'inspect': {const {plan,planHash}=loadPlan(planFile,project);result={version:plan.version,planHash,localExclude,trackedPaths:plan.trackedPaths,suites:Object.fromEntries(PHASES.map(p=>[p,plan.suites[p].map(c=>c.id)])),manualChecks:plan.manualChecks||[],fingerprint:fingerprint(project,plan.trackedPaths)};break;}
+    case 'inspect': {const {plan,planHash}=loadPlan(planFile,project);result={version:plan.version,planHash,trackedPaths:plan.trackedPaths,coverage:{untrackedRuntimeFiles:coverageAudit(project,plan.trackedPaths)},suites:Object.fromEntries(PHASES.map(p=>[p,plan.suites[p].map(c=>c.id)])),manualChecks:plan.manualChecks||[],fingerprint:fingerprint(project,plan.trackedPaths)};break;}
+    case 'git-setup': result={localExclude:ensureLocalExclude(project)};break;
+    case 'git-restore': result=restoreGit({project,planFile,commit:o.commit,apply:o.apply===true});break;
     case 'run': result=runPhase({project,planFile,task:o.task,phase:o.phase});break;
     case 'manual':result=recordManual({project,planFile,task:o.task,check:o.check,result:o.result,note:o.note});break;
     case 'gate':result=gate({project,planFile,task:o.task,save:true});break;
